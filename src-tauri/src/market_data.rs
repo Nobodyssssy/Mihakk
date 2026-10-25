@@ -80,30 +80,7 @@ fn parse_history(json: &str) -> Result<HistoryDataset, String> {
     })
 }
 fn valid_research_date(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    if bytes.len() != 10
-        || bytes[4] != b'-'
-        || bytes[7] != b'-'
-        || !bytes
-            .iter()
-            .enumerate()
-            .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit())
-    {
-        return false;
-    }
-
-    let year: u32 = value[0..4].parse().unwrap_or(0);
-    let month: u32 = value[5..7].parse().unwrap_or(0);
-    let day: u32 = value[8..10].parse().unwrap_or(0);
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let max_day = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if leap => 29,
-        2 => 28,
-        _ => return false,
-    };
-    (1900..=2100).contains(&year) && day >= 1 && day <= max_day
+    crate::market_types::valid_calendar_date(value)
 }
 
 fn normalize_request(symbol: &str, start_date: &str, end_date: &str) -> Result<String, String> {
@@ -195,6 +172,19 @@ mod tests {
         assert_eq!(result.candles.len(), 2);
         assert_eq!(result.candles[0].date, "2023-01-03");
         assert_eq!(result.candles[1].date, "2023-01-04");
+    }
+
+    #[test]
+    fn rejects_invalid_calendar_date_in_provider_response() {
+        let json = r#"{
+            "status":"ok",
+            "meta":{"symbol":"AAPL","currency":"USD"},
+            "values":[
+                {"datetime":"2023-02-30","open":"10","high":"12",
+                 "low":"9","close":"11","volume":"100"}
+            ]
+        }"#;
+        assert!(parse_history(json).is_err());
     }
 
     #[test]
