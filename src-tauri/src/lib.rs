@@ -1,7 +1,10 @@
 mod backtest;
+mod benchmark;
 mod market_data;
 mod market_types;
+mod performance;
 mod real_backtest;
+mod risk;
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {

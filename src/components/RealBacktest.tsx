@@ -12,10 +12,34 @@ type RealBacktestSummary = {
   starting_cash: number;
   fee_per_order: number;
   slippage_bps: number;
+  hold_sessions: number;
   ending_cash: number;
   ending_equity: number;
   open_shares: number;
   completed_trades: number;
+  buy_hold_drawdown: {
+    max_drawdown_pct: number;
+    peak_date: string;
+    trough_date: string;
+  };
+  drawdown: {
+    max_drawdown_pct: number;
+    peak_date: string;
+    trough_date: string;
+  };
+  trade_stats: {
+    winning_trades: number;
+    losing_trades: number;
+    breakeven_trades: number;
+    win_rate_pct: number | null;
+    realized_net_pnl: number;
+    open_net_pnl: number;
+  };
+  strategy_return_pct: number;
+  buy_hold_ending_equity: number;
+  buy_hold_return_pct: number;
+  buy_hold_shares: number;
+  outperformance_pct_points: number;
 };
 
 const usd = (n: number) => new Intl.NumberFormat("en-US", {
@@ -30,6 +54,7 @@ export default function RealBacktest() {
   const [startingCash, setStartingCash] = useState("1000");
   const [feePerOrder, setFeePerOrder] = useState("1");
   const [slippageBps, setSlippageBps] = useState("10");
+  const [holdSessions, setHoldSessions] = useState("1");
   const [result, setResult] = useState<RealBacktestSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -43,6 +68,11 @@ export default function RealBacktest() {
     const cash = Number(startingCash);
     const fee = Number(feePerOrder);
     const slip = Number(slippageBps);
+    const hold = Number(holdSessions);
+    if (!Number.isInteger(hold) || hold < 1 || hold > 60) {
+      setError("Holding period must be 1 to 60 trading sessions.");
+      return;
+    }
     if (!Number.isFinite(cash) || cash < 1 || cash > 1_000_000_000 ||
         !Number.isFinite(fee) || fee < 0 || fee > 10_000 ||
         !Number.isFinite(slip) || slip < 0 || slip > 1_000) {
@@ -62,6 +92,7 @@ export default function RealBacktest() {
         startingCash: cash,
         feePerOrder: fee,
         slippageBps: slip,
+        holdSessions: hold,
       });
       setResult(data);
     } catch (err) {
@@ -114,6 +145,13 @@ export default function RealBacktest() {
               value={slippageBps}
               onChange={(event) => { setSlippageBps(event.target.value); setResult(null); }} />
           </label>
+        </div>        <div className="real-market-filters">
+          <label htmlFor="research-hold">Holding period (trading sessions)
+            <input id="research-hold" className="real-market-key" type="number"
+              min="1" max="60" step="1" required
+              value={holdSessions}
+              onChange={(event) => { setHoldSessions(event.target.value); setResult(null); }} />
+          </label>
         </div>        <label htmlFor="twelve-key">Twelve Data API key</label>
         <input
           id="twelve-key" className="real-market-key" type="password"
@@ -136,7 +174,99 @@ export default function RealBacktest() {
           <div><span>Completed trades</span><strong>{result.completed_trades}</strong></div>
           <div><span>Open shares</span><strong>{result.open_shares}</strong></div>
         </div>
-        <p>Assumptions: {usd(result.fee_per_order)} per order; {result.slippage_bps} bps slippage; {result.adjustment}-adjusted data. Unclosed positions are marked to the last close.</p>
+        <h3>Strategy vs. buy-and-hold</h3>
+        <div className="backtest-metrics">
+          <div>
+            <span>Strategy return</span>
+            <strong className={result.strategy_return_pct >= 0 ? "pnl-up" : "pnl-down"}>
+              {result.strategy_return_pct.toFixed(2)}%
+            </strong>
+          </div>
+          <div>
+            <span>Buy-and-hold ending equity</span>
+            <strong>{usd(result.buy_hold_ending_equity)}</strong>
+          </div>
+          <div>
+            <span>Buy-and-hold return</span>
+            <strong className={result.buy_hold_return_pct >= 0 ? "pnl-up" : "pnl-down"}>
+              {result.buy_hold_return_pct.toFixed(2)}%
+            </strong>
+          </div>
+          <div>
+            <span>Strategy minus benchmark</span>
+            <strong className={result.outperformance_pct_points >= 0 ? "pnl-up" : "pnl-down"}>
+              {result.outperformance_pct_points.toFixed(2)} percentage points
+            </strong>
+          </div>
+        </div>
+        <p>Benchmark: buy whole shares at the first session's open, with the same
+          entry fee and slippage; hold to the final close. Remaining shares
+          are valued, not sold. Benchmark shares: {result.buy_hold_shares}.</p>        <h3>Trade outcomes and open-position P&amp;L</h3>
+        <div className="backtest-metrics">
+          <div>
+            <span>Winning / losing / flat trades</span>
+            <strong>{result.trade_stats.winning_trades} / {result.trade_stats.losing_trades} / {result.trade_stats.breakeven_trades}</strong>
+          </div>
+          <div>
+            <span>Win rate (completed trades)</span>
+            <strong>{result.trade_stats.win_rate_pct === null ? "N/A" : `${result.trade_stats.win_rate_pct.toFixed(1)}%`}</strong>
+          </div>
+          <div>
+            <span>Realized net P&amp;L</span>
+            <strong className={result.trade_stats.realized_net_pnl >= 0 ? "pnl-up" : "pnl-down"}>
+              {usd(result.trade_stats.realized_net_pnl)}
+            </strong>
+          </div>
+          <div>
+            <span>Open-position net P&amp;L</span>
+            <strong className={result.trade_stats.open_net_pnl >= 0 ? "pnl-up" : "pnl-down"}>
+              {usd(result.trade_stats.open_net_pnl)}
+            </strong>
+          </div>
+        </div>
+        <p>Open-position P&amp;L includes the entry fee and slippage, but not a hypothetical exit fee. All P&amp;L values are simulated USD.</p>        <h3>Portfolio risk (daily closes)</h3>
+        <div className="backtest-metrics">
+          <div>
+            <span>Maximum drawdown</span>
+            <strong className={result.drawdown.max_drawdown_pct > 0 ? "pnl-down" : undefined}>
+              {result.drawdown.max_drawdown_pct.toFixed(2)}%
+            </strong>
+          </div>
+          <div>
+            <span>Equity peak date</span>
+            <strong>{result.drawdown.max_drawdown_pct > 0 ? result.drawdown.peak_date : "N/A"}</strong>
+          </div>
+          <div>
+            <span>Equity trough date</span>
+            <strong>{result.drawdown.max_drawdown_pct > 0 ? result.drawdown.trough_date : "N/A"}</strong>
+          </div>
+        </div>
+        <p>Maximum peak-to-trough decline of simulated equity at each session's close.
+          Includes positions still open, entry costs, and completed-trade costs.
+          Does not measure intraday drawdowns or hypothetical exit fees.</p>        <h3>Risk compared with buy-and-hold</h3>
+        <div className="backtest-metrics">
+          <div>
+            <span>Strategy maximum drawdown</span>
+            <strong className="pnl-down">{result.drawdown.max_drawdown_pct.toFixed(2)}%</strong>
+          </div>
+          <div>
+            <span>Buy-and-hold maximum drawdown</span>
+            <strong className="pnl-down">{result.buy_hold_drawdown.max_drawdown_pct.toFixed(2)}%</strong>
+          </div>
+          <div>
+            <span>Benchmark minus strategy drawdown</span>
+            <strong className={result.buy_hold_drawdown.max_drawdown_pct >= result.drawdown.max_drawdown_pct ? "pnl-up" : "pnl-down"}>
+              {(result.buy_hold_drawdown.max_drawdown_pct - result.drawdown.max_drawdown_pct).toFixed(2)} percentage points
+            </strong>
+          </div>
+          <div>
+            <span>Benchmark peak / trough</span>
+            <strong>{result.buy_hold_drawdown.max_drawdown_pct > 0 ? `${result.buy_hold_drawdown.peak_date} / ${result.buy_hold_drawdown.trough_date}` : "N/A"}</strong>
+          </div>
+        </div>
+        <p>Both drawdowns use daily closing equity, the same starting cash, fee, and slippage.
+          Buy-and-hold enters at the first session's open; the strategy may remain in cash.
+          Lower drawdown is not, by itself, evidence of a better strategy.</p>        <p>Assumptions: {usd(result.fee_per_order)} per order; {result.slippage_bps} bps slippage; {result.hold_sessions} trading-session hold; {result.adjustment}-adjusted data. Unclosed positions are marked to the last close.</p>
       </div>}
       <p className="backtest-disclaimer">
         Free Basic data: internal non-display use. This panel shows aggregate

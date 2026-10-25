@@ -1,4 +1,5 @@
 use crate::market_types::{Candle, validate_and_sort};
+use crate::risk::{DrawdownReport, DrawdownTracker};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -33,17 +34,39 @@ pub fn run_volume_breakout(
     fee: f64,
     slippage_bps: f64,
 ) -> Result<BacktestResult, String> {
+    run_volume_breakout_with_hold(input, starting_cash, fee, slippage_bps, 1)
+}
+
+pub fn run_volume_breakout_with_hold(
+    input: &[Candle],
+    starting_cash: f64,
+    fee: f64,
+    slippage_bps: f64,
+    hold_sessions: u32,
+) -> Result<BacktestResult, String> {
+    Ok(run_volume_breakout_with_risk(input, starting_cash, fee, slippage_bps, hold_sessions)?.0)
+}
+
+pub fn run_volume_breakout_with_risk(
+    input: &[Candle],
+    starting_cash: f64,
+    fee: f64,
+    slippage_bps: f64,
+    hold_sessions: u32,
+) -> Result<(BacktestResult, DrawdownReport), String> {
     if !starting_cash.is_finite()
         || starting_cash <= 0.0
         || !fee.is_finite()
         || fee < 0.0
         || !slippage_bps.is_finite()
         || !(0.0..10000.0).contains(&slippage_bps)
+        || !(1..=60).contains(&hold_sessions)
     {
         return Err("Invalid backtest parameters".into());
     }
 
     let candles = validate_and_sort(input.to_vec())?;
+    let mut drawdown = DrawdownTracker::new(starting_cash, &candles[0].date);
     let mut cash = starting_cash;
     let mut position: Option<Position> = None;
     let mut trades = Vec::new();
@@ -53,8 +76,8 @@ pub fn run_volume_breakout(
         let today = &candles[i];
 
         if let Some(open) = &position {
-            // Exit at the next session's open, never entry day.
-            if i > open.entry_index {
+            // Exit at the open after the specified number of trading sessions.
+            if i - open.entry_index >= hold_sessions as usize {
                 let price = today.open * (1.0 - slippage_bps / 10000.0);
                 let proceeds = open.shares as f64 * price - fee;
                 let pnl = proceeds - open.total_cost;
@@ -72,6 +95,10 @@ pub fn run_volume_breakout(
 
                 position = None;
             }
+            let open_value = position
+                .as_ref()
+                .map_or(0.0, |p| p.shares as f64 * today.close);
+            drawdown.observe(&today.date, cash + open_value)?;
             continue;
         }
 
@@ -81,6 +108,7 @@ pub fn run_volume_breakout(
         let signal = previous.close > earlier.high && previous.volume > earlier.volume;
 
         if !signal || cash <= fee {
+            drawdown.observe(&today.date, cash)?;
             continue;
         }
 
@@ -88,6 +116,7 @@ pub fn run_volume_breakout(
         let shares = ((cash - fee) / buy_price).floor() as u64;
 
         if shares == 0 {
+            drawdown.observe(&today.date, cash)?;
             continue;
         }
 
@@ -101,6 +130,7 @@ pub fn run_volume_breakout(
             entry_price: buy_price,
             total_cost,
         });
+        drawdown.observe(&today.date, cash + shares as f64 * today.close)?;
     }
 
     let open_shares = position.as_ref().map_or(0, |p| p.shares);
@@ -109,12 +139,15 @@ pub fn run_volume_breakout(
     // Open positions are valued at last close, not sold artificially.
     let ending_equity = cash + open_shares as f64 * last_close;
 
-    Ok(BacktestResult {
-        ending_cash: cash,
-        ending_equity,
-        open_shares,
-        trades,
-    })
+    Ok((
+        BacktestResult {
+            ending_cash: cash,
+            ending_equity,
+            open_shares,
+            trades,
+        },
+        drawdown.finish(),
+    ))
 }
 
 #[derive(Serialize)]
@@ -147,6 +180,16 @@ pub fn run_demo_backtest() -> Result<DemoRun, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn daily_equity_includes_open_position_losses() {
+        let mut candles = sample();
+        candles[2].low = 9.0;
+        candles[2].close = 10.0;
+        let (result, risk) = run_volume_breakout_with_risk(&candles, 100.0, 0.0, 0.0, 1).unwrap();
+        assert!((result.ending_equity - 108.0).abs() < 1e-8);
+        assert!((risk.max_drawdown_pct - 16.0).abs() < 1e-8);
+        assert_eq!(risk.trough_date, "2023-01-05");
+    }
 
     fn bar(date: &str, open: f64, high: f64, low: f64, close: f64, volume: u64) -> Candle {
         Candle {
@@ -168,6 +211,23 @@ mod tests {
         ]
     }
 
+    #[test]
+    fn holds_two_sessions_before_exit() {
+        let mut candles = sample();
+        candles.push(bar("2023-01-09", 14.0, 15.0, 13.0, 14.0, 260));
+        let run = run_volume_breakout_with_hold(&candles, 100.0, 0.0, 0.0, 2).unwrap();
+        assert_eq!(run.trades.len(), 1);
+        assert_eq!(run.trades[0].entry_date, "2023-01-05");
+        assert_eq!(run.trades[0].exit_date, "2023-01-09");
+        assert_eq!(run.trades[0].shares, 8);
+        assert!((run.ending_equity - 116.0).abs() < 0.000001);
+    }
+
+    #[test]
+    fn rejects_invalid_holding_periods() {
+        assert!(run_volume_breakout_with_hold(&sample(), 100.0, 0.0, 0.0, 0).is_err());
+        assert!(run_volume_breakout_with_hold(&sample(), 100.0, 0.0, 0.0, 61).is_err());
+    }
     #[test]
     fn buys_after_signal_and_exits_next_session() {
         let result = run_volume_breakout(&sample(), 100.0, 0.0, 0.0).unwrap();

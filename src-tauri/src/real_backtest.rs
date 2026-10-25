@@ -1,4 +1,4 @@
-use crate::backtest::run_volume_breakout;
+use crate::backtest::run_volume_breakout_with_risk;
 use crate::market_data::HistoryDataset;
 use crate::market_types::validate_and_sort;
 use serde::Serialize;
@@ -20,10 +20,19 @@ pub struct RealBacktestSummary {
     pub starting_cash: f64,
     pub fee_per_order: f64,
     pub slippage_bps: f64,
+    pub hold_sessions: u32,
     pub ending_cash: f64,
     pub ending_equity: f64,
     pub open_shares: u64,
     pub completed_trades: usize,
+    pub drawdown: crate::risk::DrawdownReport,
+    pub buy_hold_drawdown: crate::risk::DrawdownReport,
+    pub trade_stats: crate::performance::TradePerformance,
+    pub strategy_return_pct: f64,
+    pub buy_hold_ending_equity: f64,
+    pub buy_hold_return_pct: f64,
+    pub buy_hold_shares: u64,
+    pub outperformance_pct_points: f64,
 }
 
 fn validate_research_costs(
@@ -42,7 +51,13 @@ fn validate_research_costs(
     }
     Ok(())
 }
-fn summarize_with_settings(
+fn validate_hold_sessions(hold_sessions: u32) -> Result<(), String> {
+    if !(1..=60).contains(&hold_sessions) {
+        return Err("Holding period must be between 1 and 60 trading sessions".into());
+    }
+    Ok(())
+}
+fn summarize_with_hold(
     dataset: HistoryDataset,
     symbol: &str,
     start_date: &str,
@@ -50,8 +65,10 @@ fn summarize_with_settings(
     starting_cash: f64,
     fee_per_order: f64,
     slippage_bps: f64,
+    hold_sessions: u32,
 ) -> Result<RealBacktestSummary, String> {
     validate_research_costs(starting_cash, fee_per_order, slippage_bps)?;
+    validate_hold_sessions(hold_sessions)?;
     if dataset.symbol != symbol
         || dataset.currency != "USD"
         || dataset.interval != "1day"
@@ -70,7 +87,25 @@ fn summarize_with_settings(
         return Err("Historical series is too short; refusing a partial backtest".into());
     }
 
-    let result = run_volume_breakout(&candles, starting_cash, fee_per_order, slippage_bps)?;
+    let (result, drawdown) = run_volume_breakout_with_risk(
+        &candles,
+        starting_cash,
+        fee_per_order,
+        slippage_bps,
+        hold_sessions,
+    )?;
+
+    // Keep provider OHLCV in Rust: return aggregate results, never raw candles.
+    let (baseline, buy_hold_drawdown) = crate::benchmark::run_buy_and_hold_with_risk(
+        &candles,
+        starting_cash,
+        fee_per_order,
+        slippage_bps,
+    )?;
+    let strategy_return_pct = (result.ending_equity / starting_cash - 1.0) * 100.0;
+    let buy_hold_return_pct = (baseline.ending_equity / starting_cash - 1.0) * 100.0;
+    let outperformance_pct_points = strategy_return_pct - buy_hold_return_pct;
+    let trade_stats = crate::performance::summarize_trades(&result, starting_cash)?;
 
     Ok(RealBacktestSummary {
         provider: dataset.provider.to_string(),
@@ -83,13 +118,43 @@ fn summarize_with_settings(
         starting_cash,
         fee_per_order,
         slippage_bps,
+        hold_sessions,
         ending_cash: result.ending_cash,
         ending_equity: result.ending_equity,
         open_shares: result.open_shares,
         completed_trades: result.trades.len(),
+        drawdown,
+        buy_hold_drawdown,
+        trade_stats,
+        strategy_return_pct,
+        buy_hold_ending_equity: baseline.ending_equity,
+        buy_hold_return_pct,
+        buy_hold_shares: baseline.shares,
+        outperformance_pct_points,
     })
 }
 
+#[cfg(test)]
+fn summarize_with_settings(
+    dataset: HistoryDataset,
+    symbol: &str,
+    start_date: &str,
+    end_date: &str,
+    starting_cash: f64,
+    fee_per_order: f64,
+    slippage_bps: f64,
+) -> Result<RealBacktestSummary, String> {
+    summarize_with_hold(
+        dataset,
+        symbol,
+        start_date,
+        end_date,
+        starting_cash,
+        fee_per_order,
+        slippage_bps,
+        1,
+    )
+}
 #[cfg(test)]
 fn summarize(
     dataset: HistoryDataset,
@@ -116,9 +181,11 @@ pub async fn run_real_backtest(
     starting_cash: f64,
     fee_per_order: f64,
     slippage_bps: f64,
+    hold_sessions: u32,
 ) -> Result<RealBacktestSummary, String> {
-    // Reject invalid numeric settings before consuming any API credits.
+    // Validate all settings before requesting market data.
     validate_research_costs(starting_cash, fee_per_order, slippage_bps)?;
+    validate_hold_sessions(hold_sessions)?;
     let symbol = symbol.trim().to_ascii_uppercase();
     let dataset = crate::market_data::fetch_history(
         api_key,
@@ -127,7 +194,7 @@ pub async fn run_real_backtest(
         end_date.clone(),
     )
     .await?;
-    summarize_with_settings(
+    summarize_with_hold(
         dataset,
         &symbol,
         &start_date,
@@ -135,11 +202,61 @@ pub async fn run_real_backtest(
         starting_cash,
         fee_per_order,
         slippage_bps,
+        hold_sessions,
     )
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn report_includes_the_buy_and_hold_benchmark() {
+        let report = summarize_with_hold(
+            fixture(),
+            "AAPL",
+            "2023-01-01",
+            "2023-03-31",
+            1000.0,
+            1.0,
+            10.0,
+            1,
+        )
+        .unwrap();
+        assert!((report.strategy_return_pct - 0.0).abs() < 1e-8);
+        assert!(report.buy_hold_return_pct > 0.0);
+        assert!(report.buy_hold_ending_equity > report.ending_equity);
+        assert!(report.outperformance_pct_points < 0.0);
+    }
+
+    #[test]
+    fn rejects_invalid_research_holding_period() {
+        assert!(
+            summarize_with_hold(
+                fixture(),
+                "AAPL",
+                "2023-01-01",
+                "2023-03-31",
+                1000.0,
+                1.0,
+                10.0,
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            summarize_with_hold(
+                fixture(),
+                "AAPL",
+                "2023-01-01",
+                "2023-03-31",
+                1000.0,
+                1.0,
+                10.0,
+                61,
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn rejects_invalid_research_costs() {
         assert!(validate_research_costs(0.0, 1.0, 10.0).is_err());
