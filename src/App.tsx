@@ -1,7 +1,8 @@
-﻿import BacktestDemo from "./components/BacktestDemo";
+import BacktestDemo from "./components/BacktestDemo";
 import { useEffect, useState } from "react";
 import "./theme.css";
 import PriceChart from "./components/PriceChart";
+import type { DemoRun } from "./types/backtest";
 
 type ThemeName =
   | "main"
@@ -21,6 +22,7 @@ const themes: ThemeName[] = [
 ];
 
 export default function App() {
+  const [demo, setDemo] = useState<DemoRun | null>(null);
   const [theme, setTheme] = useState<ThemeName>("main");
 
   useEffect(() => {
@@ -55,11 +57,11 @@ export default function App() {
       <section className="chart-panel">
         <div className="chart-heading">
           <h2>Historical Price Chart</h2>
-          <p>Synthetic sample data - not real market prices</p>
+          <p>{demo ? "Synthetic Rust backtest candles + trade markers" : "Synthetic sample data - not real market prices"}</p>
         </div>
-        <PriceChart theme={theme} />
+        <PriceChart theme={theme} demo={demo} />
       </section>
-      <BacktestDemo />
+      <BacktestDemo onComplete={setDemo} />
       <section className="panel-grid">
         <article className="panel-card">
           <span className="panel-label">Application</span>

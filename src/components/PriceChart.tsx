@@ -1,8 +1,15 @@
-﻿import { useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import {
-  createChart, CandlestickSeries, ColorType,
-  type CandlestickData, type Time, type IChartApi
+  createChart,
+  createSeriesMarkers,
+  CandlestickSeries,
+  ColorType,
+  type CandlestickData,
+  type SeriesMarker,
+  type Time,
+  type IChartApi,
 } from "lightweight-charts";
+import type { DemoRun } from "../types/backtest";
 
 const sample: CandlestickData<Time>[] = [
   { time: "2026-10-01", open: 10, high: 12, low: 9, close: 11 },
@@ -19,7 +26,13 @@ const sample: CandlestickData<Time>[] = [
   { time: "2026-10-16", open: 17, high: 19, low: 16, close: 18 },
 ];
 
-export default function PriceChart({ theme }: { theme: string }) {
+export default function PriceChart({
+  theme,
+  demo,
+}: {
+  theme: string;
+  demo: DemoRun | null;
+}) {
   const container = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -29,40 +42,25 @@ export default function PriceChart({ theme }: { theme: string }) {
 
     const onWheel = (event: WheelEvent) => {
       if (!event.ctrlKey || event.deltaY === 0) return;
-
       event.preventDefault();
-
       if (!chart) return;
-
       const scale = chart.timeScale();
       const range = scale.getVisibleLogicalRange();
       if (!range) return;
-
       const span = range.to - range.from;
       if (span <= 0) return;
-
       const x = event.clientX - element.getBoundingClientRect().left;
-      const anchor =
-        scale.coordinateToLogical(x) ??
-        (range.from + range.to) / 2;
-
-      const factor = Math.exp(
-        Math.max(-0.4, Math.min(0.4, event.deltaY * 0.002))
-      );
-
+      const anchor = scale.coordinateToLogical(x) ?? (range.from + range.to) / 2;
+      const factor = Math.exp(Math.max(-0.4, Math.min(0.4, event.deltaY * 0.002)));
       const nextSpan = Math.max(2, Math.min(100000, span * factor));
       const ratio = nextSpan / span;
-
       scale.setVisibleLogicalRange({
         from: anchor - (anchor - range.from) * ratio,
         to: anchor + (range.to - anchor) * ratio,
       });
     };
 
-    element.addEventListener("wheel", onWheel, {
-      passive: false,
-      capture: true,
-    });
+    element.addEventListener("wheel", onWheel, { passive: false, capture: true });
 
     const frame = requestAnimationFrame(() => {
       const css = getComputedStyle(document.documentElement);
@@ -90,8 +88,33 @@ export default function PriceChart({ theme }: { theme: string }) {
         wickDownColor: color("--chart-down"),
         borderVisible: false,
       });
+      candles.setData(demo ? demo.candles.map((bar) => ({
+        time: bar.date as Time,
+        open: bar.open,
+        high: bar.high,
+        low: bar.low,
+        close: bar.close,
+      })) : sample);
 
-      candles.setData(sample);
+      if (demo) {
+        const markers: SeriesMarker<Time>[] = demo.result.trades.flatMap((trade) => [
+          {
+            time: trade.entry_date as Time,
+            position: "belowBar" as const,
+            shape: "arrowUp" as const,
+            color: color("--market-up"),
+            text: `Buy ${trade.shares}`,
+          },
+          {
+            time: trade.exit_date as Time,
+            position: "aboveBar" as const,
+            shape: "arrowDown" as const,
+            color: color("--market-down"),
+            text: `Sell ${trade.shares}`,
+          },
+        ]);
+        createSeriesMarkers(candles, markers);
+      }
       chart.timeScale().fitContent();
     });
 
@@ -100,8 +123,7 @@ export default function PriceChart({ theme }: { theme: string }) {
       cancelAnimationFrame(frame);
       chart?.remove();
     };
-  }, [theme]);
+  }, [theme, demo]);
 
   return <div ref={container} className="chart-canvas" />;
 }
-

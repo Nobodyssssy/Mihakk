@@ -1,21 +1,6 @@
-﻿import { useState } from "react";
+import { useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-
-type Trade = {
-  entry_date: string;
-  exit_date: string;
-  shares: number;
-  entry_price: number;
-  exit_price: number;
-  net_pnl: number;
-};
-
-type BacktestResult = {
-  ending_cash: number;
-  ending_equity: number;
-  open_shares: number;
-  trades: Trade[];
-};
+import type { BacktestResult, DemoRun } from "../types/backtest";
 
 const usd = (value: number) =>
   new Intl.NumberFormat("en-US", {
@@ -23,7 +8,11 @@ const usd = (value: number) =>
     currency: "USD",
   }).format(value);
 
-export default function BacktestDemo() {
+export default function BacktestDemo({
+  onComplete,
+}: {
+  onComplete: (run: DemoRun) => void;
+}) {
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -31,10 +20,10 @@ export default function BacktestDemo() {
   async function runBacktest() {
     setLoading(true);
     setError("");
-
     try {
-      const data = await invoke<BacktestResult>("run_demo_backtest");
-      setResult(data);
+      const run = await invoke<DemoRun>("run_demo_backtest");
+      setResult(run.result);
+      onComplete(run);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -45,11 +34,7 @@ export default function BacktestDemo() {
   return (
     <section className="backtest-panel">
       <h2>Backtesting Engine</h2>
-      <p>
-        Synthetic volume-breakout example. Run the verified
-        Rust engine and inspect its transactions.
-      </p>
-
+      <p>Synthetic volume-breakout example. The chart and report use the same Rust candles.</p>
       <button
         className="backtest-run"
         onClick={runBacktest}
@@ -57,42 +42,22 @@ export default function BacktestDemo() {
       >
         {loading ? "Running..." : "Run Backtest"}
       </button>
-
-      {!isTauri() && (
-        <p>Open the Windows app to execute Rust backtests.</p>
-      )}
-
+      {!isTauri() && <p>Open the Windows app to execute Rust backtests.</p>}
       {error && <p role="alert">{error}</p>}
 
       {result && (
         <div className="backtest-results" aria-live="polite">
           <div className="backtest-metrics">
-            <div>
-              <span>Ending equity</span>
-              <strong>{usd(result.ending_equity)}</strong>
-            </div>
-            <div>
-              <span>Remaining cash</span>
-              <strong>{usd(result.ending_cash)}</strong>
-            </div>
-            <div>
-              <span>Completed trades</span>
-              <strong>{result.trades.length}</strong>
-            </div>
+            <div><span>Ending equity</span><strong>{usd(result.ending_equity)}</strong></div>
+            <div><span>Remaining cash</span><strong>{usd(result.ending_cash)}</strong></div>
+            <div><span>Completed trades</span><strong>{result.trades.length}</strong></div>
           </div>
-
           <div className="backtest-table-wrap">
             <table className="backtest-table">
-              <thead>
-                <tr>
-                  <th>Entry</th>
-                  <th>Exit</th>
-                  <th>Shares</th>
-                  <th>Buy</th>
-                  <th>Sell</th>
-                  <th>Net P&L</th>
-                </tr>
-              </thead>
+              <thead><tr>
+                <th>Entry</th><th>Exit</th><th>Shares</th>
+                <th>Buy</th><th>Sell</th><th>Net P&amp;L</th>
+              </tr></thead>
               <tbody>
                 {result.trades.map((trade, index) => (
                   <tr key={index}>
@@ -101,9 +66,7 @@ export default function BacktestDemo() {
                     <td>{trade.shares}</td>
                     <td>{usd(trade.entry_price)}</td>
                     <td>{usd(trade.exit_price)}</td>
-                    <td className={
-                      trade.net_pnl >= 0 ? "pnl-up" : "pnl-down"
-                    }>
+                    <td className={trade.net_pnl >= 0 ? "pnl-up" : "pnl-down"}>
                       {usd(trade.net_pnl)}
                     </td>
                   </tr>
@@ -111,10 +74,7 @@ export default function BacktestDemo() {
               </tbody>
             </table>
           </div>
-          <p className="backtest-disclaimer">
-            Synthetic fixture, separate from the sample chart.
-            No real stock prices or transactions.
-          </p>
+          <p className="backtest-disclaimer">Synthetic data only. This is not historical market performance.</p>
         </div>
       )}
     </section>

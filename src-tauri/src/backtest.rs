@@ -117,8 +117,14 @@ pub fn run_volume_breakout(
     })
 }
 
+#[derive(Serialize)]
+pub struct DemoRun {
+    pub candles: Vec<Candle>,
+    pub result: BacktestResult,
+}
+
 #[tauri::command]
-pub fn run_demo_backtest() -> Result<BacktestResult, String> {
+pub fn run_demo_backtest() -> Result<DemoRun, String> {
     let bar = |date: &str, open: f64, high: f64, low: f64, close: f64, volume: u64| Candle {
         date: date.to_string(),
         open,
@@ -135,7 +141,8 @@ pub fn run_demo_backtest() -> Result<BacktestResult, String> {
         bar("2023-01-06", 13.0, 14.0, 12.0, 13.0, 240),
     ];
 
-    run_volume_breakout(&candles, 100.0, 0.0, 0.0)
+    let result = run_volume_breakout(&candles, 100.0, 0.0, 0.0)?;
+    Ok(DemoRun { candles, result })
 }
 #[cfg(test)]
 mod tests {
