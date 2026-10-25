@@ -1,0 +1,102 @@
+﻿import { useEffect, useState } from "react";
+import "./theme.css";
+
+type ThemeName =
+  | "main"
+  | "catppuccin"
+  | "dracula"
+  | "aura"
+  | "tokyo-night"
+  | "rose-pine";
+
+const themes: ThemeName[] = [
+  "main",
+  "catppuccin",
+  "dracula",
+  "aura",
+  "tokyo-night",
+  "rose-pine",
+];
+
+export default function App() {
+  const [theme, setTheme] = useState<ThemeName>("main");
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+  }, [theme]);
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="brand-block">
+          <div className="brand-mark">◢</div>
+          <div>
+            <div className="brand-name">Mihakk</div>
+            <div className="brand-sub" lang="ar" dir="rtl">مِحَكّ</div>
+          </div>
+        </div>
+
+        <div className="topbar-right">
+          <span className="build-pill">v0.1 foundation</span>
+        </div>
+      </header>
+
+      <section className="hero-card">
+        <p className="eyebrow">STOCK STRATEGY LAB</p>
+        <h1 className="hero-title">Test the strategy. Trust the evidence.</h1>
+        <p className="hero-copy">
+          Research historical US stocks, backtest trading ideas,
+          compare results, and validate your edge before risking real money.
+        </p>
+      </section>
+
+      <section className="panel-grid">
+        <article className="panel-card">
+          <span className="panel-label">Application</span>
+          <strong className="panel-value">Windows desktop ready</strong>
+          <p className="panel-copy">Tauri v2 + React + Rust foundation is working.</p>
+        </article>
+
+        <article className="panel-card">
+          <span className="panel-label">Backtesting Engine</span>
+          <strong className="panel-value">Not implemented yet</strong>
+          <p className="panel-copy">Next milestone: deterministic historical strategy engine.</p>
+        </article>
+
+        <article className="panel-card">
+          <span className="panel-label">Theme System</span>
+          <strong className="panel-value">Centralized in theme.css</strong>
+          <p className="panel-copy">No hard-coded color system in components.</p>
+        </article>
+      </section>
+
+      <section className="theme-card">
+        <div className="section-head">
+          <div>
+            <h2>Theme Preview</h2>
+            <p>Choose one of the six default themes for Mihakk.</p>
+          </div>
+        </div>
+
+        <div className="theme-switcher">
+          {themes.map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={item === theme ? "theme-btn active" : "theme-btn"}
+              onClick={() => setTheme(item)}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <footer className="footer-bar">
+        <span>Local-first</span>
+        <span>Stocks only</span>
+        <span>Research & simulation</span>
+      </footer>
+    </main>
+  );
+}

@@ -1,0 +1,41 @@
+﻿.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+.topbar {
+  padding: 22px 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #293343;
+}
+.brand { font-size: 24px; font-weight: 700; }
+.brand span { color: #91b5ec; margin-left: 10px; }
+.version, footer { color: #8895a8; font-size: 13px; }
+.hero { padding: 75px 40px 55px; max-width: 800px; }
+.eyebrow {
+  color: #79a9f5;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+h1 { font-size: clamp(32px, 5vw, 54px); line-height: 1.12; }
+.hero > p:last-child { color: #aab5c5; line-height: 1.7; }
+.status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  padding: 0 40px 40px;
+}
+.status div {
+  background: #1b2432;
+  border: 1px solid #303c4e;
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.status span { color: #aab5c5; font-size: 13px; }
+footer { padding: 24px 40px; margin-top: auto; }
