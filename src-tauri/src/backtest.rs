@@ -54,6 +54,54 @@ pub fn run_volume_breakout_with_risk(
     slippage_bps: f64,
     hold_sessions: u32,
 ) -> Result<(BacktestResult, DrawdownReport), String> {
+    run_volume_breakout_with_exits(
+        input,
+        starting_cash,
+        fee,
+        slippage_bps,
+        hold_sessions,
+        0.0,
+        0.0,
+    )
+}
+
+// All thresholds are based on the actual entry fill (including buy slippage).
+// Stops and targets become active on the entry day after an opening fill.
+// At an opening gap, use the actual open rather than an unattainable threshold.
+// If both thresholds are touched within one daily bar, assume STOP first.
+fn protective_exit_price(
+    candle: &Candle,
+    entry_price: f64,
+    stop_loss_pct: f64,
+    take_profit_pct: f64,
+    slippage_bps: f64,
+) -> Option<f64> {
+    let stop = entry_price * (1.0 - stop_loss_pct / 100.0);
+    let target = entry_price * (1.0 + take_profit_pct / 100.0);
+    let raw = if stop_loss_pct > 0.0 && candle.open <= stop {
+        Some(candle.open)
+    } else if take_profit_pct > 0.0 && candle.open >= target {
+        Some(candle.open)
+    } else if stop_loss_pct > 0.0 && candle.low <= stop {
+        Some(stop)
+    } else if take_profit_pct > 0.0 && candle.high >= target {
+        Some(target)
+    } else {
+        None
+    };
+    raw.map(|price| price * (1.0 - slippage_bps / 10000.0))
+}
+
+// Zero means disabled. Explicitly conservative rules for daily OHLC candles.
+pub fn run_volume_breakout_with_exits(
+    input: &[Candle],
+    starting_cash: f64,
+    fee: f64,
+    slippage_bps: f64,
+    hold_sessions: u32,
+    stop_loss_pct: f64,
+    take_profit_pct: f64,
+) -> Result<(BacktestResult, DrawdownReport), String> {
     if !starting_cash.is_finite()
         || starting_cash <= 0.0
         || !fee.is_finite()
@@ -61,6 +109,10 @@ pub fn run_volume_breakout_with_risk(
         || !slippage_bps.is_finite()
         || !(0.0..10000.0).contains(&slippage_bps)
         || !(1..=60).contains(&hold_sessions)
+        || !stop_loss_pct.is_finite()
+        || !(0.0..100.0).contains(&stop_loss_pct)
+        || !take_profit_pct.is_finite()
+        || !(0.0..=1000.0).contains(&take_profit_pct)
     {
         return Err("Invalid backtest parameters".into());
     }
@@ -76,24 +128,32 @@ pub fn run_volume_breakout_with_risk(
         let today = &candles[i];
 
         if let Some(open) = &position {
-            // Exit at the open after the specified number of trading sessions.
-            if i - open.entry_index >= hold_sessions as usize {
-                let price = today.open * (1.0 - slippage_bps / 10000.0);
-                let proceeds = open.shares as f64 * price - fee;
-                let pnl = proceeds - open.total_cost;
+            // Holding-period exit occurs at the opening auction, before intraday checks.
+            let exit = if i - open.entry_index >= hold_sessions as usize {
+                Some(today.open * (1.0 - slippage_bps / 10000.0))
+            } else {
+                protective_exit_price(
+                    today,
+                    open.entry_price,
+                    stop_loss_pct,
+                    take_profit_pct,
+                    slippage_bps,
+                )
+            };
 
+            if let Some(price) = exit {
+                let closed = position.take().expect("checked open position");
+                let proceeds = closed.shares as f64 * price - fee;
+                let pnl = proceeds - closed.total_cost;
                 cash += proceeds;
-
                 trades.push(Trade {
-                    entry_date: open.entry_date.clone(),
+                    entry_date: closed.entry_date,
                     exit_date: today.date.clone(),
-                    shares: open.shares,
-                    entry_price: open.entry_price,
+                    shares: closed.shares,
+                    entry_price: closed.entry_price,
                     exit_price: price,
                     net_pnl: pnl,
                 });
-
-                position = None;
             }
             let open_value = position
                 .as_ref()
@@ -130,7 +190,31 @@ pub fn run_volume_breakout_with_risk(
             entry_price: buy_price,
             total_cost,
         });
-        drawdown.observe(&today.date, cash + shares as f64 * today.close)?;
+
+        // A bracket placed with the opening buy can execute later the same day.
+        if let Some(price) = protective_exit_price(
+            today,
+            buy_price,
+            stop_loss_pct,
+            take_profit_pct,
+            slippage_bps,
+        ) {
+            let closed = position.take().expect("just opened position");
+            let proceeds = closed.shares as f64 * price - fee;
+            cash += proceeds;
+            trades.push(Trade {
+                entry_date: closed.entry_date,
+                exit_date: today.date.clone(),
+                shares: closed.shares,
+                entry_price: closed.entry_price,
+                exit_price: price,
+                net_pnl: proceeds - closed.total_cost,
+            });
+        }
+        let open_value = position
+            .as_ref()
+            .map_or(0.0, |p| p.shares as f64 * today.close);
+        drawdown.observe(&today.date, cash + open_value)?;
     }
 
     let open_shares = position.as_ref().map_or(0, |p| p.shares);
@@ -268,5 +352,90 @@ mod tests {
     fn invalid_costs_are_rejected() {
         assert!(run_volume_breakout(&sample(), 100.0, -1.0, 0.0).is_err());
         assert!(run_volume_breakout(&sample(), 100.0, 0.0, 10000.0).is_err());
+    }
+    #[test]
+    fn disabled_exits_preserve_existing_behavior() {
+        let before = run_volume_breakout_with_risk(&sample(), 100.0, 0.0, 0.0, 1).unwrap();
+        let after =
+            run_volume_breakout_with_exits(&sample(), 100.0, 0.0, 0.0, 1, 0.0, 0.0).unwrap();
+        assert!((before.0.ending_equity - after.0.ending_equity).abs() < 1e-8);
+        assert_eq!(before.0.trades.len(), after.0.trades.len());
+    }
+
+    #[test]
+    fn stop_can_trigger_on_entry_day() {
+        let (result, _) =
+            run_volume_breakout_with_exits(&sample(), 100.0, 0.0, 0.0, 5, 5.0, 0.0).unwrap();
+        assert_eq!(result.trades.len(), 1);
+        assert_eq!(result.trades[0].entry_date, "2023-01-05");
+        assert_eq!(result.trades[0].exit_date, "2023-01-05");
+        assert!((result.trades[0].exit_price - 11.4).abs() < 1e-8);
+        assert!((result.ending_equity - 95.2).abs() < 1e-8);
+    }
+
+    #[test]
+    fn downward_gap_fills_at_open_not_at_stop() {
+        let mut c = sample();
+        c[2].low = 11.5; // No stop on entry day.
+        c[3] = bar("2023-01-06", 10.0, 12.0, 9.0, 11.0, 240);
+        let (result, _) = run_volume_breakout_with_exits(&c, 100.0, 0.0, 0.0, 5, 5.0, 0.0).unwrap();
+        assert_eq!(result.trades.len(), 1);
+        assert!((result.trades[0].exit_price - 10.0).abs() < 1e-8);
+        assert!((result.ending_equity - 84.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn target_fills_at_threshold_on_intraday_touch() {
+        let (result, _) =
+            run_volume_breakout_with_exits(&sample(), 100.0, 0.0, 0.0, 5, 0.0, 10.0).unwrap();
+        assert_eq!(result.trades.len(), 1);
+        assert_eq!(result.trades[0].exit_date, "2023-01-06");
+        assert!((result.trades[0].exit_price - 13.2).abs() < 1e-8);
+        assert!((result.ending_equity - 109.6).abs() < 1e-8);
+    }
+
+    #[test]
+    fn upward_gap_fills_at_open_not_target() {
+        let mut c = sample();
+        c[3] = bar("2023-01-06", 15.0, 16.0, 14.0, 15.0, 240);
+        let (result, _) =
+            run_volume_breakout_with_exits(&c, 100.0, 0.0, 0.0, 5, 0.0, 10.0).unwrap();
+        assert!((result.trades[0].exit_price - 15.0).abs() < 1e-8);
+        assert!((result.ending_equity - 124.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn simultaneous_intraday_touch_assumes_stop_first() {
+        let mut c = sample();
+        c[2] = bar("2023-01-05", 12.0, 14.0, 10.0, 12.0, 220);
+        let (result, _) =
+            run_volume_breakout_with_exits(&c, 100.0, 0.0, 0.0, 5, 10.0, 10.0).unwrap();
+        assert_eq!(result.trades.len(), 1);
+        assert!((result.trades[0].exit_price - 10.8).abs() < 1e-8);
+        assert!((result.ending_equity - 90.4).abs() < 1e-8);
+    }
+
+    #[test]
+    fn time_exit_at_open_precedes_intraday_stop() {
+        let mut c = sample();
+        c[2].low = 11.5;
+        c[3] = bar("2023-01-06", 13.0, 14.0, 10.0, 13.0, 240);
+        let (result, _) = run_volume_breakout_with_exits(&c, 100.0, 0.0, 0.0, 1, 5.0, 0.0).unwrap();
+        assert!((result.trades[0].exit_price - 13.0).abs() < 1e-8);
+        assert!((result.ending_equity - 108.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn rejects_invalid_exit_percentages() {
+        for stop in [-1.0, 100.0, f64::NAN] {
+            assert!(
+                run_volume_breakout_with_exits(&sample(), 100.0, 0.0, 0.0, 5, stop, 0.0).is_err()
+            );
+        }
+        for target in [-1.0, 1000.01, f64::NAN] {
+            assert!(
+                run_volume_breakout_with_exits(&sample(), 100.0, 0.0, 0.0, 5, 0.0, target).is_err()
+            );
+        }
     }
 }

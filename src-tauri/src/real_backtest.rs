@@ -1,4 +1,4 @@
-use crate::backtest::run_volume_breakout_with_risk;
+use crate::backtest::run_volume_breakout_with_exits;
 use crate::market_data::HistoryDataset;
 use crate::market_types::validate_and_sort;
 use serde::Serialize;
@@ -21,6 +21,8 @@ pub struct RealBacktestSummary {
     pub fee_per_order: f64,
     pub slippage_bps: f64,
     pub hold_sessions: u32,
+    pub stop_loss_pct: f64,
+    pub take_profit_pct: f64,
     pub ending_cash: f64,
     pub ending_equity: f64,
     pub open_shares: u64,
@@ -57,6 +59,19 @@ fn validate_hold_sessions(hold_sessions: u32) -> Result<(), String> {
     }
     Ok(())
 }
+fn validate_exit_settings(stop_loss_pct: f64, take_profit_pct: f64) -> Result<(), String> {
+    if !stop_loss_pct.is_finite()
+        || !(0.0..100.0).contains(&stop_loss_pct)
+        || !take_profit_pct.is_finite()
+        || !(0.0..=1000.0).contains(&take_profit_pct)
+    {
+        return Err("Stop-loss must be 0-99.999%, take-profit 0-1000%; zero disables".into());
+    }
+    Ok(())
+}
+
+// Preserve existing offline fixture tests and previous default behavior.
+#[cfg(test)]
 fn summarize_with_hold(
     dataset: HistoryDataset,
     symbol: &str,
@@ -67,8 +82,35 @@ fn summarize_with_hold(
     slippage_bps: f64,
     hold_sessions: u32,
 ) -> Result<RealBacktestSummary, String> {
+    summarize_with_exits(
+        dataset,
+        symbol,
+        start_date,
+        end_date,
+        starting_cash,
+        fee_per_order,
+        slippage_bps,
+        hold_sessions,
+        0.0,
+        0.0,
+    )
+}
+
+fn summarize_with_exits(
+    dataset: HistoryDataset,
+    symbol: &str,
+    start_date: &str,
+    end_date: &str,
+    starting_cash: f64,
+    fee_per_order: f64,
+    slippage_bps: f64,
+    hold_sessions: u32,
+    stop_loss_pct: f64,
+    take_profit_pct: f64,
+) -> Result<RealBacktestSummary, String> {
     validate_research_costs(starting_cash, fee_per_order, slippage_bps)?;
     validate_hold_sessions(hold_sessions)?;
+    validate_exit_settings(stop_loss_pct, take_profit_pct)?;
     if dataset.symbol != symbol
         || dataset.currency != "USD"
         || dataset.interval != "1day"
@@ -87,12 +129,14 @@ fn summarize_with_hold(
         return Err("Historical series is too short; refusing a partial backtest".into());
     }
 
-    let (result, drawdown) = run_volume_breakout_with_risk(
+    let (result, drawdown) = run_volume_breakout_with_exits(
         &candles,
         starting_cash,
         fee_per_order,
         slippage_bps,
         hold_sessions,
+        stop_loss_pct,
+        take_profit_pct,
     )?;
 
     // Keep provider OHLCV in Rust: return aggregate results, never raw candles.
@@ -119,6 +163,8 @@ fn summarize_with_hold(
         fee_per_order,
         slippage_bps,
         hold_sessions,
+        stop_loss_pct,
+        take_profit_pct,
         ending_cash: result.ending_cash,
         ending_equity: result.ending_equity,
         open_shares: result.open_shares,
@@ -182,10 +228,13 @@ pub async fn run_real_backtest(
     fee_per_order: f64,
     slippage_bps: f64,
     hold_sessions: u32,
+    stop_loss_pct: f64,
+    take_profit_pct: f64,
 ) -> Result<RealBacktestSummary, String> {
     // Validate all settings before requesting market data.
     validate_research_costs(starting_cash, fee_per_order, slippage_bps)?;
     validate_hold_sessions(hold_sessions)?;
+    validate_exit_settings(stop_loss_pct, take_profit_pct)?;
     let symbol = symbol.trim().to_ascii_uppercase();
     let dataset = crate::market_data::fetch_history(
         api_key,
@@ -194,7 +243,7 @@ pub async fn run_real_backtest(
         end_date.clone(),
     )
     .await?;
-    summarize_with_hold(
+    summarize_with_exits(
         dataset,
         &symbol,
         &start_date,
@@ -203,11 +252,21 @@ pub async fn run_real_backtest(
         fee_per_order,
         slippage_bps,
         hold_sessions,
+        stop_loss_pct,
+        take_profit_pct,
     )
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn validates_research_exit_inputs() {
+        assert!(validate_exit_settings(0.0, 0.0).is_ok());
+        assert!(validate_exit_settings(5.0, 15.0).is_ok());
+        assert!(validate_exit_settings(-1.0, 0.0).is_err());
+        assert!(validate_exit_settings(100.0, 0.0).is_err());
+        assert!(validate_exit_settings(0.0, 1000.1).is_err());
+    }
     #[test]
     fn report_includes_the_buy_and_hold_benchmark() {
         let report = summarize_with_hold(

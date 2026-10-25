@@ -13,6 +13,8 @@ type RealBacktestSummary = {
   fee_per_order: number;
   slippage_bps: number;
   hold_sessions: number;
+  stop_loss_pct: number;
+  take_profit_pct: number;
   ending_cash: number;
   ending_equity: number;
   open_shares: number;
@@ -55,6 +57,8 @@ export default function RealBacktest() {
   const [feePerOrder, setFeePerOrder] = useState("1");
   const [slippageBps, setSlippageBps] = useState("10");
   const [holdSessions, setHoldSessions] = useState("1");
+  const [stopLossPct, setStopLossPct] = useState("0");
+  const [takeProfitPct, setTakeProfitPct] = useState("0");
   const [result, setResult] = useState<RealBacktestSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -69,6 +73,13 @@ export default function RealBacktest() {
     const fee = Number(feePerOrder);
     const slip = Number(slippageBps);
     const hold = Number(holdSessions);
+    const stop = Number(stopLossPct);
+    const target = Number(takeProfitPct);
+    if (!Number.isFinite(stop) || stop < 0 || stop >= 100 ||
+        !Number.isFinite(target) || target < 0 || target > 1000) {
+      setError("Stop-loss must be 0 to less than 100%; take-profit 0 to 1000%.");
+      return;
+    }
     if (!Number.isInteger(hold) || hold < 1 || hold > 60) {
       setError("Holding period must be 1 to 60 trading sessions.");
       return;
@@ -93,6 +104,8 @@ export default function RealBacktest() {
         feePerOrder: fee,
         slippageBps: slip,
         holdSessions: hold,
+        stopLossPct: stop,
+        takeProfitPct: target,
       });
       setResult(data);
     } catch (err) {
@@ -151,6 +164,18 @@ export default function RealBacktest() {
               min="1" max="60" step="1" required
               value={holdSessions}
               onChange={(event) => { setHoldSessions(event.target.value); setResult(null); }} />
+          </label>
+          <label htmlFor="research-stop">Stop-loss (%) - 0 disables
+            <input id="research-stop" className="real-market-key" type="number"
+              min="0" max="99.99" step="0.1" required
+              value={stopLossPct}
+              onChange={(event) => { setStopLossPct(event.target.value); setResult(null); }} />
+          </label>
+          <label htmlFor="research-target">Take-profit (%) - 0 disables
+            <input id="research-target" className="real-market-key" type="number"
+              min="0" max="1000" step="0.1" required
+              value={takeProfitPct}
+              onChange={(event) => { setTakeProfitPct(event.target.value); setResult(null); }} />
           </label>
         </div>        <label htmlFor="twelve-key">Twelve Data API key</label>
         <input
@@ -266,8 +291,12 @@ export default function RealBacktest() {
         </div>
         <p>Both drawdowns use daily closing equity, the same starting cash, fee, and slippage.
           Buy-and-hold enters at the first session's open; the strategy may remain in cash.
-          Lower drawdown is not, by itself, evidence of a better strategy.</p>        <p>Assumptions: {usd(result.fee_per_order)} per order; {result.slippage_bps} bps slippage; {result.hold_sessions} trading-session hold; {result.adjustment}-adjusted data. Unclosed positions are marked to the last close.</p>
+          Lower drawdown is not, by itself, evidence of a better strategy.</p>        <p>Assumptions: {usd(result.fee_per_order)} per order; {result.slippage_bps} bps slippage; {result.hold_sessions} trading-session hold; stop-loss {result.stop_loss_pct ? `${result.stop_loss_pct}%` : "off"}; take-profit {result.take_profit_pct ? `${result.take_profit_pct}%` : "off"}; {result.adjustment}-adjusted data. Unclosed positions are marked to the last close.</p>
       </div>}
+      <p className="backtest-disclaimer">
+        Stops and targets are approximated from daily candles. Opening gaps execute
+        at the open; if stop and target are both touched intraday, stop wins.
+      </p>
       <p className="backtest-disclaimer">
         Free Basic data: internal non-display use. This panel shows aggregate
         research results only; the chart above still uses synthetic data.
