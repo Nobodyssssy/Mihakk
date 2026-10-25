@@ -19,6 +19,11 @@ type RealBacktestSummary = {
   ending_equity: number;
   open_shares: number;
   completed_trades: number;
+  exit_counts: {
+    stop_loss: number;
+    take_profit: number;
+    time_limit: number;
+  };
   buy_hold_drawdown: {
     max_drawdown_pct: number;
     peak_date: string;
@@ -226,7 +231,15 @@ export default function RealBacktest() {
         </div>
         <p>Benchmark: buy whole shares at the first session's open, with the same
           entry fee and slippage; hold to the final close. Remaining shares
-          are valued, not sold. Benchmark shares: {result.buy_hold_shares}.</p>        <h3>Trade outcomes and open-position P&amp;L</h3>
+          are valued, not sold. Benchmark shares: {result.buy_hold_shares}.</p>        <h3>Why trades exited</h3>
+        <div className="backtest-metrics">
+          <div><span>Stop-loss exits</span><strong>{result.exit_counts.stop_loss}</strong></div>
+          <div><span>Take-profit exits</span><strong>{result.exit_counts.take_profit}</strong></div>
+          <div><span>Holding-limit exits</span><strong>{result.exit_counts.time_limit}</strong></div>
+          <div><span>Positions still open</span><strong>{result.open_shares > 0 ? "1" : "0"}</strong></div>
+        </div>
+        <p>Exit counts include completed trades only. The open-position count refers to positions, not shares; the engine currently allows one position at a time.</p>
+        <h3>Trade outcomes and open-position P&amp;L</h3>
         <div className="backtest-metrics">
           <div>
             <span>Winning / losing / flat trades</span>

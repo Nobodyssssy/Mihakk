@@ -2,6 +2,14 @@ use crate::market_types::{Candle, validate_and_sort};
 use crate::risk::{DrawdownReport, DrawdownTracker};
 use serde::Serialize;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExitReason {
+    StopLoss,
+    TakeProfit,
+    TimeLimit,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Trade {
     pub entry_date: String,
@@ -10,6 +18,7 @@ pub struct Trade {
     pub entry_price: f64,
     pub exit_price: f64,
     pub net_pnl: f64,
+    pub exit_reason: ExitReason,
 }
 
 #[derive(Debug, Serialize)]
@@ -18,6 +27,25 @@ pub struct BacktestResult {
     pub ending_equity: f64,
     pub open_shares: u64,
     pub trades: Vec<Trade>,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct ExitCounts {
+    pub stop_loss: usize,
+    pub take_profit: usize,
+    pub time_limit: usize,
+}
+
+pub fn summarize_exit_counts(result: &BacktestResult) -> ExitCounts {
+    let mut counts = ExitCounts::default();
+    for trade in &result.trades {
+        match trade.exit_reason {
+            ExitReason::StopLoss => counts.stop_loss += 1,
+            ExitReason::TakeProfit => counts.take_profit += 1,
+            ExitReason::TimeLimit => counts.time_limit += 1,
+        }
+    }
+    counts
 }
 
 struct Position {
@@ -75,21 +103,21 @@ fn protective_exit_price(
     stop_loss_pct: f64,
     take_profit_pct: f64,
     slippage_bps: f64,
-) -> Option<f64> {
+) -> Option<(f64, ExitReason)> {
     let stop = entry_price * (1.0 - stop_loss_pct / 100.0);
     let target = entry_price * (1.0 + take_profit_pct / 100.0);
     let raw = if stop_loss_pct > 0.0 && candle.open <= stop {
-        Some(candle.open)
+        Some((candle.open, ExitReason::StopLoss))
     } else if take_profit_pct > 0.0 && candle.open >= target {
-        Some(candle.open)
+        Some((candle.open, ExitReason::TakeProfit))
     } else if stop_loss_pct > 0.0 && candle.low <= stop {
-        Some(stop)
+        Some((stop, ExitReason::StopLoss))
     } else if take_profit_pct > 0.0 && candle.high >= target {
-        Some(target)
+        Some((target, ExitReason::TakeProfit))
     } else {
         None
     };
-    raw.map(|price| price * (1.0 - slippage_bps / 10000.0))
+    raw.map(|(price, reason)| (price * (1.0 - slippage_bps / 10000.0), reason))
 }
 
 // Zero means disabled. Explicitly conservative rules for daily OHLC candles.
@@ -130,7 +158,10 @@ pub fn run_volume_breakout_with_exits(
         if let Some(open) = &position {
             // Holding-period exit occurs at the opening auction, before intraday checks.
             let exit = if i - open.entry_index >= hold_sessions as usize {
-                Some(today.open * (1.0 - slippage_bps / 10000.0))
+                Some((
+                    today.open * (1.0 - slippage_bps / 10000.0),
+                    ExitReason::TimeLimit,
+                ))
             } else {
                 protective_exit_price(
                     today,
@@ -141,7 +172,7 @@ pub fn run_volume_breakout_with_exits(
                 )
             };
 
-            if let Some(price) = exit {
+            if let Some((price, exit_reason)) = exit {
                 let closed = position.take().expect("checked open position");
                 let proceeds = closed.shares as f64 * price - fee;
                 let pnl = proceeds - closed.total_cost;
@@ -153,6 +184,7 @@ pub fn run_volume_breakout_with_exits(
                     entry_price: closed.entry_price,
                     exit_price: price,
                     net_pnl: pnl,
+                    exit_reason,
                 });
             }
             let open_value = position
@@ -192,7 +224,7 @@ pub fn run_volume_breakout_with_exits(
         });
 
         // A bracket placed with the opening buy can execute later the same day.
-        if let Some(price) = protective_exit_price(
+        if let Some((price, exit_reason)) = protective_exit_price(
             today,
             buy_price,
             stop_loss_pct,
@@ -209,6 +241,7 @@ pub fn run_volume_breakout_with_exits(
                 entry_price: closed.entry_price,
                 exit_price: price,
                 net_pnl: proceeds - closed.total_cost,
+                exit_reason,
             });
         }
         let open_value = position
@@ -353,6 +386,51 @@ mod tests {
         assert!(run_volume_breakout(&sample(), 100.0, -1.0, 0.0).is_err());
         assert!(run_volume_breakout(&sample(), 100.0, 0.0, 10000.0).is_err());
     }
+    #[test]
+    fn counts_stop_loss_exits_without_reclassifying_price_fills() {
+        let (result, _) =
+            run_volume_breakout_with_exits(&sample(), 100.0, 0.0, 0.0, 5, 5.0, 0.0).unwrap();
+        let counts = summarize_exit_counts(&result);
+        assert_eq!(counts.stop_loss, 1);
+        assert_eq!(counts.take_profit, 0);
+        assert_eq!(counts.time_limit, 0);
+        assert_eq!(result.trades[0].exit_reason, ExitReason::StopLoss);
+    }
+
+    #[test]
+    fn counts_target_and_holding_period_exits_separately() {
+        let (target, _) =
+            run_volume_breakout_with_exits(&sample(), 100.0, 0.0, 0.0, 5, 0.0, 10.0).unwrap();
+        let t = summarize_exit_counts(&target);
+        assert_eq!((t.stop_loss, t.take_profit, t.time_limit), (0, 1, 0));
+
+        let (timed, _) =
+            run_volume_breakout_with_exits(&sample(), 100.0, 0.0, 0.0, 1, 0.0, 0.0).unwrap();
+        let t = summarize_exit_counts(&timed);
+        assert_eq!((t.stop_loss, t.take_profit, t.time_limit), (0, 0, 1));
+    }
+
+    #[test]
+    fn exit_counts_reconcile_with_closed_trades_only() {
+        let (open, _) =
+            run_volume_breakout_with_exits(&sample()[..3], 100.0, 0.0, 0.0, 5, 0.0, 0.0).unwrap();
+        assert_eq!(open.open_shares, 8);
+        let counts = summarize_exit_counts(&open);
+        assert_eq!(
+            counts.stop_loss + counts.take_profit + counts.time_limit,
+            open.trades.len()
+        );
+        assert_eq!(counts.stop_loss + counts.take_profit + counts.time_limit, 0);
+
+        let (closed, _) =
+            run_volume_breakout_with_exits(&sample(), 100.0, 0.0, 0.0, 1, 5.0, 0.0).unwrap();
+        let counts = summarize_exit_counts(&closed);
+        assert_eq!(
+            counts.stop_loss + counts.take_profit + counts.time_limit,
+            closed.trades.len()
+        );
+    }
+
     #[test]
     fn disabled_exits_preserve_existing_behavior() {
         let before = run_volume_breakout_with_risk(&sample(), 100.0, 0.0, 0.0, 1).unwrap();

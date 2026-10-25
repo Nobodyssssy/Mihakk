@@ -27,6 +27,7 @@ pub struct RealBacktestSummary {
     pub ending_equity: f64,
     pub open_shares: u64,
     pub completed_trades: usize,
+    pub exit_counts: crate::backtest::ExitCounts,
     pub drawdown: crate::risk::DrawdownReport,
     pub buy_hold_drawdown: crate::risk::DrawdownReport,
     pub trade_stats: crate::performance::TradePerformance,
@@ -169,6 +170,7 @@ fn summarize_with_exits(
         ending_equity: result.ending_equity,
         open_shares: result.open_shares,
         completed_trades: result.trades.len(),
+        exit_counts: crate::backtest::summarize_exit_counts(&result),
         drawdown,
         buy_hold_drawdown,
         trade_stats,
@@ -267,6 +269,26 @@ mod tests {
         assert!(validate_exit_settings(100.0, 0.0).is_err());
         assert!(validate_exit_settings(0.0, 1000.1).is_err());
     }
+    #[test]
+    fn report_exit_counts_match_completed_trades() {
+        let report = summarize_with_hold(
+            fixture(),
+            "AAPL",
+            "2023-01-01",
+            "2023-03-31",
+            1000.0,
+            1.0,
+            10.0,
+            1,
+        )
+        .unwrap();
+        let count = report.exit_counts;
+        assert_eq!(
+            count.stop_loss + count.take_profit + count.time_limit,
+            report.completed_trades
+        );
+    }
+
     #[test]
     fn report_includes_the_buy_and_hold_benchmark() {
         let report = summarize_with_hold(

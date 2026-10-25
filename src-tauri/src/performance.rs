@@ -73,6 +73,7 @@ mod tests {
             entry_price: 10.0,
             exit_price: 10.0 + pnl,
             net_pnl: pnl,
+            exit_reason: crate::backtest::ExitReason::TimeLimit,
         }
     }
 
