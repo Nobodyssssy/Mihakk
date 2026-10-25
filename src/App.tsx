@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState } from "react";
 import "./theme.css";
+import PriceChart from "./components/PriceChart";
 
 type ThemeName =
   | "main"
@@ -50,6 +51,13 @@ export default function App() {
         </p>
       </section>
 
+      <section className="chart-panel">
+        <div className="chart-heading">
+          <h2>Historical Price Chart</h2>
+          <p>Synthetic sample data - not real market prices</p>
+        </div>
+        <PriceChart theme={theme} />
+      </section>
       <section className="panel-grid">
         <article className="panel-card">
           <span className="panel-label">Application</span>
@@ -100,3 +108,4 @@ export default function App() {
     </main>
   );
 }
+
