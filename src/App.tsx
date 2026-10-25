@@ -1,4 +1,5 @@
-﻿import { useEffect, useState } from "react";
+﻿import BacktestDemo from "./components/BacktestDemo";
+import { useEffect, useState } from "react";
 import "./theme.css";
 import PriceChart from "./components/PriceChart";
 
@@ -58,6 +59,7 @@ export default function App() {
         </div>
         <PriceChart theme={theme} />
       </section>
+      <BacktestDemo />
       <section className="panel-grid">
         <article className="panel-card">
           <span className="panel-label">Application</span>
@@ -67,8 +69,8 @@ export default function App() {
 
         <article className="panel-card">
           <span className="panel-label">Backtesting Engine</span>
-          <strong className="panel-value">Not implemented yet</strong>
-          <p className="panel-copy">Next milestone: deterministic historical strategy engine.</p>
+          <strong className="panel-value">Rust prototype available</strong>
+          <p className="panel-copy">Verified synthetic backtest available below.</p>
         </article>
 
         <article className="panel-card">
@@ -108,4 +110,5 @@ export default function App() {
     </main>
   );
 }
+
 

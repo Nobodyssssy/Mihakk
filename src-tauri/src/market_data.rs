@@ -26,15 +26,16 @@ struct ApiResponse {
 }
 
 #[derive(Serialize)]
-pub struct HistorySummary {
-    symbol: String,
-    currency: String,
-    bars: usize,
-    first_date: String,
-    last_date: String,
+pub struct HistoryDataset {
+    pub provider: &'static str,
+    pub symbol: String,
+    pub currency: String,
+    pub interval: &'static str,
+    pub adjustment: &'static str,
+    pub candles: Vec<crate::market_types::Candle>,
 }
 
-fn parse_summary(json: &str) -> Result<HistorySummary, String> {
+fn parse_history(json: &str) -> Result<HistoryDataset, String> {
     let data: ApiResponse = serde_json::from_str(json).map_err(|_| "Invalid API response")?;
 
     if data.status != "ok" {
@@ -44,61 +45,42 @@ fn parse_summary(json: &str) -> Result<HistorySummary, String> {
     let meta = data.meta.ok_or("Missing symbol information")?;
     let bars = data.values.ok_or("Missing historical prices")?;
 
-    if bars.is_empty() {
-        return Err("No historical candles returned".into());
-    }
+    let candles: Vec<crate::market_types::Candle> = bars
+        .into_iter()
+        .map(|bar| {
+            let price = |value: &str| {
+                value
+                    .parse::<f64>()
+                    .map_err(|_| "Invalid price".to_string())
+            };
 
-    for bar in &bars {
-        let price = |v: &str| -> Result<f64, String> {
-            let n: f64 = v.parse().map_err(|_| "Invalid price")?;
-            if !n.is_finite() || n <= 0.0 {
-                return Err("Non-positive or non-finite price".into());
-            }
-            Ok(n)
-        };
+            Ok(crate::market_types::Candle {
+                date: bar.datetime,
+                open: price(&bar.open)?,
+                high: price(&bar.high)?,
+                low: price(&bar.low)?,
+                close: price(&bar.close)?,
+                volume: bar
+                    .volume
+                    .parse::<u64>()
+                    .map_err(|_| "Invalid volume".to_string())?,
+            })
+        })
+        .collect::<Result<_, String>>()?;
 
-        let o = price(&bar.open)?;
-        let h = price(&bar.high)?;
-        let l = price(&bar.low)?;
-        let c = price(&bar.close)?;
+    let candles = crate::market_types::validate_and_sort(candles)?;
 
-        if h < o.max(c) || l > o.min(c) || h < l {
-            return Err("Invalid OHLC candle".into());
-        }
-
-        bar.volume
-            .parse::<u64>()
-            .map_err(|_| "Invalid trading volume")?;
-
-        if bar.datetime.len() != 10 {
-            return Err("Invalid trading date".into());
-        }
-    }
-
-    let first = bars
-        .iter()
-        .map(|b| b.datetime.as_str())
-        .min()
-        .unwrap()
-        .to_string();
-    let last = bars
-        .iter()
-        .map(|b| b.datetime.as_str())
-        .max()
-        .unwrap()
-        .to_string();
-
-    Ok(HistorySummary {
+    Ok(HistoryDataset {
+        provider: "twelve_data",
         symbol: meta.symbol,
         currency: meta.currency,
-        bars: bars.len(),
-        first_date: first,
-        last_date: last,
+        interval: "1day",
+        adjustment: "splits",
+        candles,
     })
 }
-
 #[tauri::command]
-pub async fn fetch_history_summary(api_key: String) -> Result<HistorySummary, String> {
+pub async fn fetch_history(api_key: String) -> Result<HistoryDataset, String> {
     if api_key.trim().is_empty() {
         return Err("API key is required".into());
     }
@@ -125,7 +107,7 @@ pub async fn fetch_history_summary(api_key: String) -> Result<HistorySummary, St
         .await
         .map_err(|_| "Could not read provider response")?;
 
-    parse_summary(&body)
+    parse_history(&body)
 }
 
 #[cfg(test)]
@@ -145,10 +127,10 @@ mod tests {
             ]
         }"#;
 
-        let result = parse_summary(json).unwrap();
-        assert_eq!(result.bars, 2);
-        assert_eq!(result.first_date, "2023-01-03");
-        assert_eq!(result.last_date, "2023-01-04");
+        let result = parse_history(json).unwrap();
+        assert_eq!(result.candles.len(), 2);
+        assert_eq!(result.candles[0].date, "2023-01-03");
+        assert_eq!(result.candles[1].date, "2023-01-04");
     }
 
     #[test]
@@ -162,6 +144,6 @@ mod tests {
             ]
         }"#;
 
-        assert!(parse_summary(json).is_err());
+        assert!(parse_history(json).is_err());
     }
 }
