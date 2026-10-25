@@ -390,3 +390,59 @@ button {
     flex-direction: column;
   }
 }
+
+/* MIHAKK MARKET COLORS — THEME-DEPENDENT */
+
+:root {
+  --market-up: #10b981;
+  --market-down: #f87171;
+  --chart-height: 360px;
+
+  --chart-up: var(--market-up);
+  --chart-down: var(--market-down);
+}
+
+:root[data-theme="catppuccin"] {
+  --market-up: #a6e3a1;
+  --market-down: #f38ba8;
+}
+
+:root[data-theme="dracula"] {
+  --market-up: #50fa7b;
+  --market-down: #ff5555;
+}
+
+:root[data-theme="aura"] {
+  --market-up: #61ffca;
+  --market-down: #ff6767;
+}
+
+:root[data-theme="tokyo-night"] {
+  --market-up: #9ece6a;
+  --market-down: #f7768e;
+}
+
+:root[data-theme="rose-pine"] {
+  --market-up: #9ccfd8;
+  --market-down: #eb6f92;
+}
+
+.chart-panel {
+  margin-top: var(--space-6);
+  padding: var(--space-5);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel-strong);
+}
+.chart-heading h2 {
+  margin: 0 0 var(--space-2);
+}
+.chart-heading p {
+  margin: 0 0 var(--space-4);
+  color: var(--text-secondary);
+}
+.chart-canvas {
+  width: 100%;
+  height: var(--chart-height);
+}
+
