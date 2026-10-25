@@ -1,4 +1,5 @@
 import BacktestDemo from "./components/BacktestDemo";
+import RealBacktest from "./components/RealBacktest";
 import { useEffect, useState } from "react";
 import "./theme.css";
 import PriceChart from "./components/PriceChart";
@@ -62,6 +63,7 @@ export default function App() {
         <PriceChart theme={theme} demo={demo} />
       </section>
       <BacktestDemo onComplete={setDemo} />
+      <RealBacktest />
       <section className="panel-grid">
         <article className="panel-card">
           <span className="panel-label">Application</span>
@@ -112,5 +114,6 @@ export default function App() {
     </main>
   );
 }
+
 
 

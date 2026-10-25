@@ -1,0 +1,225 @@
+use crate::backtest::run_volume_breakout;
+use crate::market_data::HistoryDataset;
+use crate::market_types::validate_and_sort;
+use serde::Serialize;
+
+const STARTING_CASH_USD: f64 = 1000.0;
+const FEE_USD: f64 = 1.0;
+const SLIPPAGE_BPS: f64 = 10.0;
+
+// Aggregate-only result: do not send licensed raw candles to the UI.
+#[derive(Serialize)]
+pub struct RealBacktestSummary {
+    pub provider: String,
+    pub symbol: String,
+    pub currency: String,
+    pub adjustment: String,
+    pub first_date: String,
+    pub last_date: String,
+    pub bars: usize,
+    pub starting_cash: f64,
+    pub fee_per_order: f64,
+    pub slippage_bps: f64,
+    pub ending_cash: f64,
+    pub ending_equity: f64,
+    pub open_shares: u64,
+    pub completed_trades: usize,
+}
+
+fn validate_research_costs(
+    starting_cash: f64,
+    fee_per_order: f64,
+    slippage_bps: f64,
+) -> Result<(), String> {
+    if !starting_cash.is_finite() || !(1.0..=1_000_000_000.0).contains(&starting_cash) {
+        return Err("Starting USD must be between 1 and 1,000,000,000".into());
+    }
+    if !fee_per_order.is_finite() || !(0.0..=10_000.0).contains(&fee_per_order) {
+        return Err("Fee per order must be between 0 and 10,000 USD".into());
+    }
+    if !slippage_bps.is_finite() || !(0.0..=1_000.0).contains(&slippage_bps) {
+        return Err("Slippage must be between 0 and 1,000 basis points".into());
+    }
+    Ok(())
+}
+fn summarize_with_settings(
+    dataset: HistoryDataset,
+    symbol: &str,
+    start_date: &str,
+    end_date: &str,
+    starting_cash: f64,
+    fee_per_order: f64,
+    slippage_bps: f64,
+) -> Result<RealBacktestSummary, String> {
+    validate_research_costs(starting_cash, fee_per_order, slippage_bps)?;
+    if dataset.symbol != symbol
+        || dataset.currency != "USD"
+        || dataset.interval != "1day"
+        || dataset.adjustment != "splits"
+    {
+        return Err("Unexpected provider metadata".into());
+    }
+
+    let candles = validate_and_sort(dataset.candles)?;
+    let first_date = candles.first().unwrap().date.clone();
+    let last_date = candles.last().unwrap().date.clone();
+    if first_date.as_str() < start_date || last_date.as_str() > end_date {
+        return Err("Provider returned prices outside requested dates".into());
+    }
+    if candles.len() < 50 {
+        return Err("Historical series is too short; refusing a partial backtest".into());
+    }
+
+    let result = run_volume_breakout(&candles, starting_cash, fee_per_order, slippage_bps)?;
+
+    Ok(RealBacktestSummary {
+        provider: dataset.provider.to_string(),
+        symbol: dataset.symbol,
+        currency: dataset.currency,
+        adjustment: dataset.adjustment.to_string(),
+        first_date,
+        last_date,
+        bars: candles.len(),
+        starting_cash,
+        fee_per_order,
+        slippage_bps,
+        ending_cash: result.ending_cash,
+        ending_equity: result.ending_equity,
+        open_shares: result.open_shares,
+        completed_trades: result.trades.len(),
+    })
+}
+
+#[cfg(test)]
+fn summarize(
+    dataset: HistoryDataset,
+    symbol: &str,
+    start_date: &str,
+    end_date: &str,
+) -> Result<RealBacktestSummary, String> {
+    summarize_with_settings(
+        dataset,
+        symbol,
+        start_date,
+        end_date,
+        STARTING_CASH_USD,
+        FEE_USD,
+        SLIPPAGE_BPS,
+    )
+}
+#[tauri::command]
+pub async fn run_real_backtest(
+    api_key: String,
+    symbol: String,
+    start_date: String,
+    end_date: String,
+    starting_cash: f64,
+    fee_per_order: f64,
+    slippage_bps: f64,
+) -> Result<RealBacktestSummary, String> {
+    // Reject invalid numeric settings before consuming any API credits.
+    validate_research_costs(starting_cash, fee_per_order, slippage_bps)?;
+    let symbol = symbol.trim().to_ascii_uppercase();
+    let dataset = crate::market_data::fetch_history(
+        api_key,
+        symbol.clone(),
+        start_date.clone(),
+        end_date.clone(),
+    )
+    .await?;
+    summarize_with_settings(
+        dataset,
+        &symbol,
+        &start_date,
+        &end_date,
+        starting_cash,
+        fee_per_order,
+        slippage_bps,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn rejects_invalid_research_costs() {
+        assert!(validate_research_costs(0.0, 1.0, 10.0).is_err());
+        assert!(validate_research_costs(1000.0, -1.0, 10.0).is_err());
+        assert!(validate_research_costs(1000.0, 1.0, f64::NAN).is_err());
+    }
+
+    #[test]
+    fn uses_custom_starting_capital() {
+        let result = summarize_with_settings(
+            fixture(),
+            "AAPL",
+            "2023-01-01",
+            "2023-03-31",
+            250.0,
+            0.0,
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(result.starting_cash, 250.0);
+        assert_eq!(result.ending_equity, 250.0);
+        assert_eq!(result.fee_per_order, 0.0);
+        assert_eq!(result.slippage_bps, 0.0);
+    }
+
+    use super::*;
+    use crate::market_types::Candle;
+
+    fn fixture() -> HistoryDataset {
+        let candles = (0..60)
+            .map(|i| {
+                let (month, day) = if i < 28 {
+                    (1, i + 1)
+                } else if i < 56 {
+                    (2, i - 27)
+                } else {
+                    (3, i - 55)
+                };
+                Candle {
+                    date: format!("2023-{month:02}-{day:02}"),
+                    open: 10.0,
+                    high: 12.0,
+                    low: 9.0,
+                    close: 11.0,
+                    volume: 1000,
+                }
+            })
+            .collect();
+        HistoryDataset {
+            provider: "twelve_data",
+            symbol: "AAPL".into(),
+            currency: "USD".into(),
+            interval: "1day",
+            adjustment: "splits",
+            candles,
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_provider_metadata() {
+        let mut data = fixture();
+        data.currency = "EUR".into();
+        assert!(summarize(data, "AAPL", "2023-01-01", "2023-03-31").is_err());
+    }
+
+    #[test]
+    fn summarizes_a_valid_series() {
+        let summary = summarize(fixture(), "AAPL", "2023-01-01", "2023-03-31").unwrap();
+        assert_eq!(summary.bars, 60);
+        assert_eq!(summary.completed_trades, 0);
+        assert_eq!(summary.ending_equity, STARTING_CASH_USD);
+    }
+
+    #[test]
+    fn rejects_incomplete_or_duplicate_series() {
+        let mut short = fixture();
+        short.candles.truncate(10);
+        assert!(summarize(short, "AAPL", "2023-01-01", "2023-03-31").is_err());
+        let mut duplicate = fixture();
+        duplicate.candles[1].date = duplicate.candles[0].date.clone();
+        assert!(summarize(duplicate, "AAPL", "2023-01-01", "2023-03-31").is_err());
+    }
+}

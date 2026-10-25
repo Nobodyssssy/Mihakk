@@ -1,6 +1,7 @@
 mod backtest;
 mod market_data;
 mod market_types;
+mod real_backtest;
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -12,6 +13,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            real_backtest::run_real_backtest,
             backtest::run_demo_backtest,
             greet,
             market_data::fetch_history

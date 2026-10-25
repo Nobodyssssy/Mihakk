@@ -1,4 +1,4 @@
-﻿:root,
+:root,
 :root[data-theme="main"] {
   --font-family-base: "Segoe UI", Inter, Arial, sans-serif;
   --font-family-ar: "Segoe UI", Tahoma, Arial, sans-serif;
@@ -544,4 +544,50 @@ button {
 
 .backtest-disclaimer {
   font-size: 12px;
+}
+
+/* Historical research key entry: centralized theme tokens only */
+.real-market-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.real-market-form label { color: var(--text-secondary); }
+.real-market-key {
+  min-width: 220px;
+  flex: 1 1 220px;
+  padding: var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel-strong);
+  color: var(--text-primary);
+  font: inherit;
+}
+.real-market-key:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+/* Historical research parameters */
+.real-market-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+  width: 100%;
+}
+.real-market-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.real-market-filters input {
+  width: 100%;
+  min-width: 0;
+  flex: none;
+}
+@media (max-width: 700px) {
+  .real-market-filters { grid-template-columns: 1fr; }
 }
